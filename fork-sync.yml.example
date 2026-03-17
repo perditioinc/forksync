@@ -1,0 +1,35 @@
+# forksync configuration
+# Copy to fork-sync.yml and customize
+
+sync:
+  # Default: sync all forks
+  # Override per-repo below
+  default: true
+
+  # Sync strategy (fast_forward_only recommended for unattended runs)
+  strategy: fast_forward_only
+
+  # Create GitHub issue when manual sync needed
+  conflict_issues: true
+
+  # Skip repos matching these patterns
+  skip:
+    - my-customized-fork    # I have local changes
+    - archived-*            # skip archived repos
+
+  # Always sync these, even if skipped by pattern
+  always_sync:
+    - vllm
+    - LightRAG
+
+# Notifications (optional)
+notifications:
+  slack:
+    enabled: false
+    webhook_url: ""         # set via SLACK_WEBHOOK_URL env var
+    on: [conflicts, summary]  # when to notify
+
+  discord:
+    enabled: false
+    webhook_url: ""         # set via DISCORD_WEBHOOK_URL env var
+    on: [conflicts, summary]

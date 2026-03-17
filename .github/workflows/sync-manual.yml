@@ -1,0 +1,68 @@
+name: Manual Fork Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (show what would happen, make no changes)'
+        type: boolean
+        default: true      # Dry run by default for safety
+      repos:
+        description: 'Specific repos to sync (space-separated, leave empty for all)'
+        type: string
+        default: ''
+      verbose:
+        description: 'Enable verbose logging'
+        type: boolean
+        default: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # to commit SYNC_REPORT.md
+      issues: write        # to create conflict issues
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Show configuration
+        run: python -m forksync config
+
+      - name: Run fork sync
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_USERNAME: ${{ secrets.GH_USERNAME }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          PYTHONUNBUFFERED: '1'
+        run: |
+          if [ -n "${{ inputs.repos }}" ]; then
+            REPO_ARGS=""
+            for repo in ${{ inputs.repos }}; do
+              REPO_ARGS="$REPO_ARGS --repos $repo"
+            done
+            python -m forksync run $REPO_ARGS
+          else
+            python -m forksync run
+          fi
+
+      - name: Show sync history
+        run: python -m forksync history --limit 5
+
+      - name: Commit sync report
+        if: ${{ inputs.dry_run != 'true' }}
+        run: |
+          git config --global user.name 'forksync[bot]'
+          git config --global user.email 'forksync[bot]@users.noreply.github.com'
+          git add SYNC_REPORT.md sync-history.db
+          git commit -m "chore: manual sync report $(date -u +%Y-%m-%d)" || exit 0
+          git push

@@ -1,0 +1,46 @@
+name: Nightly Fork Sync
+
+on:
+  schedule:
+    - cron: '0 6 * * *'    # Daily at 6am UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no changes)'
+        type: boolean
+        default: true      # Manual triggers default to dry run for safety
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # to commit SYNC_REPORT.md
+      issues: write        # to create conflict issues
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Run fork sync
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_USERNAME: ${{ secrets.GH_USERNAME }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: python -m forksync run
+
+      - name: Commit sync report
+        if: ${{ inputs.dry_run != 'true' }}
+        run: |
+          git config --global user.name 'forksync[bot]'
+          git config --global user.email 'forksync[bot]@users.noreply.github.com'
+          git add SYNC_REPORT.md sync-history.db
+          git commit -m "chore: sync report $(date -u +%Y-%m-%d)" || exit 0
+          git push
