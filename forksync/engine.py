@@ -64,10 +64,19 @@ async def run_sync(
         cache = CacheClient(host=config.redis_host, port=config.redis_port)
         await cache.connect()
 
-    # Set up HTTP client
+    # Set up HTTP client.
+    # max_keepalive_connections must be >= concurrency_compare or httpx will
+    # repeatedly tear down and re-establish TLS connections, serialising the pool.
     owns_http = http is None
     if http is None:
-        http = httpx.AsyncClient(follow_redirects=True)
+        http = httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0),
+            limits=httpx.Limits(
+                max_connections=config.concurrency_compare * 2,
+                max_keepalive_connections=config.concurrency_compare,
+            ),
+        )
 
     try:
         # ── STEP 1: Fetch all fork metadata from GitHub GraphQL ──────────────
@@ -134,12 +143,24 @@ async def run_sync(
         )
 
         # ── STEP 5: Compare due forks concurrently ───────────────────────────
-        logger.info("Step 5: Comparing %d forks against upstream...", len(due_forks))
+        logger.info(
+            "Step 5: Comparing %d forks against upstream (concurrency=%d)...",
+            len(due_forks), config.concurrency_compare,
+        )
         compare_semaphore = asyncio.Semaphore(config.concurrency_compare)
         compare_results: List[Tuple[ForkDocument, Optional[ForkStatus]]] = []
 
+        _in_flight = 0
+        _completed = 0
+        _peak_in_flight = 0
+        _total = len(due_forks)
+
         async def compare_one(fork: ForkDocument) -> Tuple[ForkDocument, Optional[ForkStatus]]:
+            nonlocal _in_flight, _completed, _peak_in_flight
             async with compare_semaphore:
+                _in_flight += 1
+                if _in_flight > _peak_in_flight:
+                    _peak_in_flight = _in_flight
                 try:
                     status = await compare_fork(fork, cache, http, config.github_token)
                     run.api_calls_used += 1
@@ -151,9 +172,21 @@ async def run_sync(
                         exc_info=True,
                     )
                     return fork, None
+                finally:
+                    _in_flight -= 1
+                    _completed += 1
+                    if _completed % 50 == 0 or _completed == _total:
+                        logger.info(
+                            "Compare progress: %d/%d done, %d in flight",
+                            _completed, _total, _in_flight,
+                        )
 
         compare_results = list(
             await asyncio.gather(*[compare_one(f) for f in due_forks])
+        )
+        logger.info(
+            "Compare phase done — peak concurrency: %d (target: %d)",
+            _peak_in_flight, config.concurrency_compare,
         )
 
         # Update fork documents with compare results
