@@ -87,10 +87,29 @@ class GitHubRestClient:
 
         Returns dict with 'merge_type' and 'message' keys on success.
         """
-        path = f"/repos/{owner}/{repo}/merge-upstream"
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/merge-upstream"
         payload = {"branch": branch}
-        logger.info("Merging upstream for %s/%s branch=%s", owner, repo, branch)
-        return await self._post(path, json=payload)
+
+        logger.info(
+            "merge-upstream request: POST %s body=%r",
+            url,
+            payload,
+        )
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, headers=self._headers, json=payload, timeout=30.0
+            )
+            self.rate_tracker.record_call()
+
+            logger.info(
+                "merge-upstream response: status=%d body=%r",
+                response.status_code,
+                response.text,
+            )
+
+            response.raise_for_status()
+            return response.json()
 
     async def create_issue(
         self,
