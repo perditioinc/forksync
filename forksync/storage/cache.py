@@ -33,6 +33,8 @@ class CacheClient:
                 host=self._host,
                 port=self._port,
                 decode_responses=True,
+                socket_connect_timeout=5,  # fail fast if host is unreachable
+                socket_timeout=5,          # fail fast on individual operations
             )
             await self._redis.ping()
             logger.info("Redis connected at %s:%d", self._host, self._port)

@@ -16,6 +16,7 @@ Pipeline:
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -46,6 +47,7 @@ async def run_sync(
     """
     started_at = datetime.now(timezone.utc)
     run = SyncRun(started_at=started_at, dry_run=dry_run)
+    logger.info("run_sync started at %s (dry_run=%s)", started_at.isoformat(), dry_run)
 
     # Decide if we have Firestore available
     use_firestore = bool(config.gcp_project_id)
@@ -143,9 +145,10 @@ async def run_sync(
         )
 
         # ── STEP 5: Compare due forks concurrently ───────────────────────────
+        _compare_start = time.monotonic()
         logger.info(
-            "Step 5: Comparing %d forks against upstream (concurrency=%d)...",
-            len(due_forks), config.concurrency_compare,
+            "Step 5: Comparing %d forks against upstream (concurrency=%d) — start %.3f",
+            len(due_forks), config.concurrency_compare, _compare_start,
         )
         compare_semaphore = asyncio.Semaphore(config.concurrency_compare)
         compare_results: List[Tuple[ForkDocument, Optional[ForkStatus]]] = []
@@ -184,9 +187,10 @@ async def run_sync(
         compare_results = list(
             await asyncio.gather(*[compare_one(f) for f in due_forks])
         )
+        _compare_duration = time.monotonic() - _compare_start
         logger.info(
-            "Compare phase done — peak concurrency: %d (target: %d)",
-            _peak_in_flight, config.concurrency_compare,
+            "Compare phase done in %.1fs — peak concurrency: %d (target: %d)",
+            _compare_duration, _peak_in_flight, config.concurrency_compare,
         )
 
         # Update fork documents with compare results
