@@ -6,6 +6,7 @@ Intended to run on Cloud Run or any container runtime.
 """
 
 import logging
+import sys
 from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -16,10 +17,18 @@ from forksync import run_sync
 from forksync.config import load_config
 from forksync.storage.firestore import FirestoreClient
 
+# Configure root logger explicitly so it works regardless of uvicorn's setup.
+# force=True overrides any existing handler configuration.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout,
+    force=True,
 )
+# Ensure the forksync namespace is always at INFO — uvicorn may set third-party
+# loggers to WARNING by default.
+logging.getLogger("forksync").setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="forksync", version="2.0.0")
@@ -49,11 +58,19 @@ class RunRequest(BaseModel):
     dry_run: bool = False
 
 
+async def _run_sync_task(dry_run: bool) -> None:
+    """Background task wrapper — ensures exceptions are logged, not swallowed."""
+    try:
+        await run_sync(config, dry_run)
+    except Exception:
+        logger.exception("Sync run failed with unhandled exception")
+
+
 @app.post("/run")
 async def trigger_sync(req: RunRequest, background_tasks: BackgroundTasks):
     """Trigger a fork sync run in the background."""
     logger.info("Sync triggered via /run (dry_run=%s)", req.dry_run)
-    background_tasks.add_task(run_sync, config, req.dry_run)
+    background_tasks.add_task(_run_sync_task, req.dry_run)
     return {"status": "started", "dry_run": req.dry_run}
 
 
