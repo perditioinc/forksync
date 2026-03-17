@@ -60,8 +60,7 @@ htmlcov/
 *.key
 
 # Databases
-# NOTE: sync-history.db IS committed intentionally (spec requirement)
-# DO NOT add sync-history.db here
+*.db
 *.db.bak
 *.db.tmp
 

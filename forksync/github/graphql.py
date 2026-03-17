@@ -291,15 +291,35 @@ class GitHubGraphQLClient:
         rest_client,
     ) -> List[ForkStatus]:
         """
-        For forks where OIDs differ, use REST compare endpoint to get
+        For all forks with active upstreams, call REST compare endpoint to get
         exact ahead_by / behind_by counts and determine true state.
+
+        Runs sequentially with 0.5s delay between calls to avoid rate limiting.
+        Skips archived upstreams and upstreams inactive for >90 days.
         """
-        async def refine_one(status: ForkStatus) -> ForkStatus:
-            if status.state not in (SyncState.BEHIND,):
-                return status
-            if status.behind_by != -1:
-                # Already has known counts
-                return status
+        now = datetime.now(timezone.utc)
+
+        refined: List[ForkStatus] = []
+        needs_compare = [
+            s for s in statuses
+            if not s.is_archived
+            and s.state not in (SyncState.ARCHIVED,)
+            and (
+                s.upstream_last_pushed is None
+                or (now - s.upstream_last_pushed).days <= 90
+            )
+        ]
+        skip_inactive = [s for s in statuses if s not in needs_compare]
+
+        logger.info(
+            "Comparing %d forks via REST (%d skipped — archived or inactive >90 days)",
+            len(needs_compare),
+            len(skip_inactive),
+        )
+
+        for i, status in enumerate(needs_compare):
+            if i > 0:
+                await asyncio.sleep(0.5)
 
             try:
                 upstream_owner, upstream_repo_name = status.upstream_repo.split("/", 1)
@@ -326,9 +346,14 @@ class GitHubGraphQLClient:
                     status.state = SyncState.UP_TO_DATE
                     status.can_fast_forward = False
 
+                logger.debug(
+                    "%s: ahead=%d behind=%d → %s",
+                    status.repo_name, ahead_by, behind_by, status.state.value,
+                )
+
             except Exception as exc:
                 logger.warning(
-                    "Failed to refine status for %s: %s — marking UNKNOWN",
+                    "Failed to compare %s: %s — marking UNKNOWN",
                     status.repo_name,
                     exc,
                 )
@@ -337,7 +362,6 @@ class GitHubGraphQLClient:
                 status.ahead_by = 0
                 status.can_fast_forward = False
 
-            return status
+            refined.append(status)
 
-        tasks = [refine_one(s) for s in statuses]
-        return list(await asyncio.gather(*tasks))
+        return refined + skip_inactive
