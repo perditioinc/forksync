@@ -16,7 +16,8 @@ jobs:
     steps:
       - name: Trigger sync
         run: |
-          curl -X POST ${{ secrets.FORKSYNC_SERVICE_URL }}/run \
+          curl --no-buffer -X POST ${{ secrets.FORKSYNC_SERVICE_URL }}/run \
             -H "Authorization: Bearer ${{ secrets.FORKSYNC_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d '{"dry_run": ${{ inputs.dry_run || false }}}'
+            -d '{"dry_run": ${{ inputs.dry_run || false }}}' \
+            --max-time 900
