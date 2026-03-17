@@ -148,6 +148,7 @@ async def run_sync(
                     logger.warning(
                         "Compare failed for %s/%s: %s",
                         fork.fork_owner, fork.fork_repo, exc,
+                        exc_info=True,
                     )
                     return fork, None
 
