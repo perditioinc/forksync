@@ -17,23 +17,25 @@ from forksync.sync.conflict import ConflictReporter, ISSUE_TITLE, ISSUE_LABELS, 
 
 def make_diverged_status(
     repo_name: str = "my-fork",
-    ahead_by: int = 5,
-    behind_by: int = 12,
+    ahead: int = 5,
+    behind: int = 12,
 ) -> ForkStatus:
     """Build a diverged ForkStatus for testing."""
     return ForkStatus(
-        repo_name=repo_name,
+        name=repo_name,
         fork_url=f"https://github.com/testuser/{repo_name}",
-        upstream_repo=f"upstream/{repo_name}",
+        fork_branch="main",
+        upstream_owner="upstream",
+        upstream_repo=repo_name,
         upstream_url=f"https://github.com/upstream/{repo_name}",
-        fork_default_branch="main",
-        upstream_default_branch="main",
+        upstream_branch="main",
+        upstream_pushed_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ahead=ahead,
+        behind=behind,
+        archived=False,
         state=SyncState.DIVERGED,
-        behind_by=behind_by,
-        ahead_by=ahead_by,
-        upstream_last_pushed=datetime(2024, 1, 1, tzinfo=timezone.utc),
-        is_archived=False,
-        can_fast_forward=False,
+        schedule_tier="nightly",
+        due=True,
     )
 
 
@@ -46,12 +48,12 @@ def test_issue_template_contains_key_fields():
     Rendered issue body must contain:
     - repo name
     - upstream URL
-    - ahead_by and behind_by counts
+    - ahead and behind counts
     - git commands for manual resolution
     - forksync credit link
     """
     reporter = ConflictReporter(username="testuser")
-    status = make_diverged_status(repo_name="cool-project", ahead_by=3, behind_by=8)
+    status = make_diverged_status(repo_name="cool-project", ahead=3, behind=8)
 
     body = reporter._render_issue_body(status)
 
@@ -185,18 +187,20 @@ def test_issue_body_contains_branch_names():
     """Issue body should contain the correct branch names."""
     reporter = ConflictReporter(username="testuser")
     status = ForkStatus(
-        repo_name="my-project",
+        name="my-project",
         fork_url="https://github.com/testuser/my-project",
-        upstream_repo="original-org/my-project",
+        fork_branch="develop",
+        upstream_owner="original-org",
+        upstream_repo="my-project",
         upstream_url="https://github.com/original-org/my-project",
-        fork_default_branch="develop",
-        upstream_default_branch="master",
+        upstream_branch="master",
+        upstream_pushed_at=None,
+        ahead=2,
+        behind=3,
+        archived=False,
         state=SyncState.DIVERGED,
-        behind_by=3,
-        ahead_by=2,
-        upstream_last_pushed=None,
-        is_archived=False,
-        can_fast_forward=False,
+        schedule_tier="nightly",
+        due=True,
     )
 
     body = reporter._render_issue_body(status)

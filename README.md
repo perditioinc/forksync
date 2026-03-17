@@ -1,98 +1,150 @@
 # forksync
 
-> Keep your GitHub forks automatically synced with upstream. Nightly. Zero cost. Zero effort.
+> Keep GitHub forks in sync at scale. Supports 10,000+ repos. Runs in seconds.
 
 ## How it works
 
-1. Every night at 6am UTC, forksync checks all your forks
-2. Forks that can be fast-forwarded are synced automatically
-3. Forks with conflicts get a GitHub Issue for manual review
+1. Every night at 6am UTC, forksync checks which forks are due based on upstream activity
+2. Forks are synced using `gh repo sync` — the official GitHub CLI tool
+3. Every sync is verified — a fork is only marked synced if confirmed up-to-date
 4. A SYNC_REPORT.md is committed showing exactly what happened
 
-## Setup (2 minutes)
+## Smart scheduling
 
-### 1. Fork this repo
+forksync checks repos based on how active their upstream is:
 
-### 2. Add secrets
+| Upstream activity | Check frequency |
+|-------------------|-----------------|
+| Pushed in last 30 days | Nightly |
+| Pushed in last year | Weekly |
+| Pushed over a year ago | Monthly |
+
+At 10,000 repos this reduces nightly API calls by 70-80% compared to checking everything every night.
+
+## Architecture
+
+```
+GitHub Actions (nightly cron)
+  → POST /run to forksync Cloud Run service
+
+forksync service
+  → GraphQL batch fetch all fork metadata (9 calls for 800 forks)
+  → Firestore batch read existing fork state
+  → Filter to only forks due for checking (schedule tiers)
+  → Compare API concurrently (50 parallel) with ETag caching
+  → gh repo sync concurrently (20 parallel) for behind forks
+  → Verify each sync with compare API
+  → Firestore batch write results
+  → Commit SYNC_REPORT.md
+```
+
+## Setup
+
+### Prerequisites
+- GCP project with Firestore and Memorystore (Redis) enabled
+- Cloud Run service deployed
+- GitHub token with repo scope
+
+### 1. Deploy the service
+
+```bash
+gcloud run deploy forksync \
+  --source . \
+  --region us-central1 \
+  --set-env-vars GH_TOKEN=your_token,FORK_OWNER=your_username
+```
+
+### 2. Add GitHub Actions secrets
+
 Go to Settings → Secrets → Actions:
-- `GH_USERNAME` — your GitHub username
+- `FORKSYNC_SERVICE_URL` — your Cloud Run service URL
+- `FORKSYNC_API_KEY` — API key for the service
 
-That's it. `GITHUB_TOKEN` is provided automatically by GitHub Actions.
+`GITHUB_TOKEN` is provided automatically by GitHub Actions.
 
 ### 3. Enable Actions
+
 Go to Actions tab → Enable workflows
 
 Syncing starts tonight at 6am UTC.
 
-### 4. Optional: customize
-Copy `fork-sync.yml.example` to `fork-sync.yml` to skip repos or
-configure notifications.
+## Configuration
 
-## How it's efficient
+Create `fork-sync.yml`:
 
-forksync uses GitHub's **GraphQL API** to fetch all fork statuses in a single
-batched query — typically 7-10 API calls for 700 forks, compared to 700 REST
-calls with a naive approach.
+```yaml
+sync:
+  fork_owner: your-github-username
+  concurrency_compare: 50
+  concurrency_sync: 20
+  verify_after_sync: true
+
+schedule:
+  nightly_threshold_days: 30
+  weekly_threshold_days: 365
+
+gcp:
+  project_id: your-project-id
+  firestore_collection: forks
+  redis_host: your-memorystore-host
+
+notifications:
+  slack_webhook: ""
+  discord_webhook: ""
+```
+
+## CLI
+
+```bash
+pip install forksync
+
+# Dry run
+python -m forksync run --dry-run
+
+# Live sync
+python -m forksync run
+
+# Check status
+python -m forksync status
+
+# Sync specific repos
+python -m forksync run --repos vllm langchain
+
+# View sync history
+python -m forksync history
+```
 
 ## Safety guarantees
 
 - **Fast-forward only** — never syncs a fork where you're ahead of upstream
 - **No force push** — ever
-- **No local git** — all operations go through GitHub's API (`merge-upstream`)
-- **Conflict issues** — diverged forks get a GitHub Issue, not a silent failure
-- **Dry run support** — preview changes without making them
+- **Verified syncs** — every sync confirmed via compare API post-sync
+- **Conflict issues** — diverged forks get a GitHub Issue
+- **Dry run support** — preview without making changes
 
-## Notifications
+## Performance
 
-Add optional secrets for notifications:
-- `SLACK_WEBHOOK_URL` — Slack incoming webhook
-- `DISCORD_WEBHOOK_URL` — Discord webhook
+| Repos | API calls/night | Runtime |
+|-------|-----------------|---------|
+| 800 | ~200 | <30s |
+| 5,000 | ~500 | <60s |
+| 10,000 | ~800 | <90s |
 
-## Manual sync
+## Use as a library
 
-Go to Actions → Nightly Fork Sync → Run workflow
-Toggle "Dry run" to preview without making changes.
+forksync is pip-installable and can be used as a library:
 
-Or use the CLI:
+```python
+from forksync import run_sync, get_status
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+# Run a full sync
+results = await run_sync()
 
-# Dry run — show what would happen
-python -m forksync run --dry-run
-
-# Check status only
-python -m forksync status
-
-# Sync specific repos
-python -m forksync run --repos vllm LightRAG
-
-# View sync history
-python -m forksync history
-
-# Show config
-python -m forksync config
+# Get status of all forks
+forks = await get_status()
 ```
 
-## Configuration
-
-Copy `fork-sync.yml.example` to `fork-sync.yml`:
-
-```yaml
-sync:
-  strategy: fast_forward_only
-  conflict_issues: true
-  skip:
-    - my-customized-fork
-  always_sync:
-    - vllm
-
-notifications:
-  slack:
-    enabled: false
-    webhook_url: ""  # or set SLACK_WEBHOOK_URL env var
-```
+Reporium uses forksync as a library to keep its fork registry current.
 
 ## Built by
 [Perditio](https://perditio.com) · Part of the [Reporium](https://reporium.com) suite

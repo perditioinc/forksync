@@ -1,7 +1,7 @@
 """
-GitHub GraphQL client for batch fork sync status.
+GitHub GraphQL client for batch fork metadata fetch.
 
-One query fetches all forks and their upstream comparison status.
+One query fetches all forks and their upstream metadata.
 Dramatically reduces API calls vs REST approach — typically 7-10 calls
 for 700 forks instead of 700 REST calls.
 """
@@ -13,8 +13,8 @@ from typing import List, Optional
 
 import httpx
 
-from forksync import ForkStatus, SyncState
-from forksync.github.rate_limit import RateLimitTracker
+from forksync.models import ForkDocument
+from forksync.scheduler import get_tier
 
 logger = logging.getLogger(__name__)
 
@@ -65,19 +65,23 @@ query GetForkStatus($login: String!, $after: String) {
 
 class GitHubGraphQLClient:
     """
-    Fetches fork sync status for all forks in minimal API calls.
+    Fetches fork metadata for all forks in minimal API calls.
     Handles pagination automatically.
-    Returns ForkStatus objects for all forks.
+    Returns ForkDocument objects for all forks.
     """
 
-    def __init__(self, token: str, rate_tracker: Optional[RateLimitTracker] = None):
+    def __init__(self, token: str):
         self.token = token
-        self.rate_tracker = rate_tracker or RateLimitTracker()
         self._headers = {
             "Authorization": f"bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/vnd.github.v4+json",
         }
+        self._api_calls: int = 0
+
+    @property
+    def api_calls(self) -> int:
+        return self._api_calls
 
     async def _execute_query(
         self,
@@ -119,7 +123,7 @@ class GitHubGraphQLClient:
                     response.raise_for_status()
 
                 response.raise_for_status()
-                self.rate_tracker.record_call()
+                self._api_calls += 1
 
                 data = response.json()
                 if "errors" in data:
@@ -144,27 +148,25 @@ class GitHubGraphQLClient:
 
         raise last_exc  # unreachable, but satisfies type checker
 
-    def _parse_node(self, node: dict, username: str) -> Optional[ForkStatus]:
-        """Parse a single repository node into a ForkStatus."""
+    def _parse_node(self, node: dict, username: str) -> Optional[ForkDocument]:
+        """Parse a single repository node into a ForkDocument."""
         try:
             repo_name = node.get("name", "")
-            fork_url = node.get("url", "")
 
             parent = node.get("parent")
             if not parent:
-                # Should not happen (isFork: true), but guard anyway
                 logger.debug("Skipping %s — no parent repo", repo_name)
                 return None
 
-            upstream_repo = parent.get("nameWithOwner", "")
-            upstream_url = parent.get("url", "")
-            is_archived = bool(parent.get("isArchived", False))
+            nameWithOwner = parent.get("nameWithOwner", "")
+            upstream_owner, _, upstream_repo_name = nameWithOwner.partition("/")
+            archived = bool(parent.get("isArchived", False))
 
             pushed_at_raw = parent.get("pushedAt")
-            upstream_last_pushed: Optional[datetime] = None
+            upstream_pushed_at: Optional[datetime] = None
             if pushed_at_raw:
                 try:
-                    upstream_last_pushed = datetime.fromisoformat(
+                    upstream_pushed_at = datetime.fromisoformat(
                         pushed_at_raw.replace("Z", "+00:00")
                     )
                 except ValueError:
@@ -177,51 +179,20 @@ class GitHubGraphQLClient:
             parent_branch_ref = parent.get("defaultBranchRef") or {}
             upstream_branch = parent_branch_ref.get("name", "main")
 
-            # OIDs for quick equality check
-            fork_ref = node.get("ref") or {}
-            fork_target = fork_ref.get("target") or {}
-            fork_oid = fork_target.get("oid", "")
+            # Schedule tier from upstream activity
+            tier = get_tier(upstream_pushed_at)
 
-            parent_target = parent_branch_ref.get("target") or {}
-            upstream_oid = parent_target.get("oid", "")
-
-            # Determine initial state from OID comparison
-            if is_archived:
-                state = SyncState.ARCHIVED
-                behind_by = 0
-                ahead_by = 0
-                can_fast_forward = False
-            elif not fork_oid or not upstream_oid:
-                state = SyncState.UNKNOWN
-                behind_by = 0
-                ahead_by = 0
-                can_fast_forward = False
-            elif fork_oid == upstream_oid:
-                state = SyncState.UP_TO_DATE
-                behind_by = 0
-                ahead_by = 0
-                can_fast_forward = False
-            else:
-                # OIDs differ — needs REST comparison to determine ahead/behind
-                # We set BEHIND as optimistic default; engine will refine via REST
-                state = SyncState.BEHIND
-                behind_by = -1   # sentinel: needs REST comparison
-                ahead_by = 0
-                can_fast_forward = True  # tentative
-
-            return ForkStatus(
-                repo_name=repo_name,
-                fork_url=fork_url,
-                upstream_repo=upstream_repo,
-                upstream_url=upstream_url,
-                fork_default_branch=fork_branch,
-                upstream_default_branch=upstream_branch,
-                state=state,
-                behind_by=behind_by,
-                ahead_by=ahead_by,
-                upstream_last_pushed=upstream_last_pushed,
-                is_archived=is_archived,
-                can_fast_forward=can_fast_forward,
+            return ForkDocument(
+                fork_owner=username,
+                fork_repo=repo_name,
+                fork_branch=fork_branch,
+                upstream_owner=upstream_owner,
+                upstream_repo=upstream_repo_name,
+                upstream_branch=upstream_branch,
+                upstream_pushed_at=upstream_pushed_at,
+                archived=archived,
+                status="unknown",
+                schedule_tier=tier,
             )
 
         except Exception as exc:
@@ -232,19 +203,18 @@ class GitHubGraphQLClient:
             )
             return None
 
-    async def get_all_fork_statuses(
+    async def get_all_forks(
         self,
         username: str,
-        rest_client=None,
-    ) -> List[ForkStatus]:
+    ) -> List[ForkDocument]:
         """
-        Fetches sync status for all forks using GraphQL pagination.
-        Typically 7-10 API calls for 700 forks vs 700 REST calls.
+        Fetches all fork metadata using GraphQL pagination.
+        Typically 7-10 API calls for 700 forks.
 
-        If a rest_client is provided, it will be used to refine
-        BEHIND status entries to detect AHEAD / DIVERGED accurately.
+        Returns a list of ForkDocument with status='unknown' —
+        compare.py fills in the actual status.
         """
-        statuses: List[ForkStatus] = []
+        forks: List[ForkDocument] = []
         after: Optional[str] = None
         page = 0
 
@@ -262,9 +232,9 @@ class GitHubGraphQLClient:
                 page_info = repositories.get("pageInfo") or {}
 
                 for node in nodes:
-                    status = self._parse_node(node, username)
-                    if status:
-                        statuses.append(status)
+                    fork = self._parse_node(node, username)
+                    if fork:
+                        forks.append(fork)
 
                 has_next = page_info.get("hasNextPage", False)
                 if not has_next:
@@ -275,93 +245,6 @@ class GitHubGraphQLClient:
                     break
 
         logger.info(
-            "GraphQL fetch complete: %d forks found in %d page(s)", len(statuses), page
+            "GraphQL fetch complete: %d forks found in %d page(s)", len(forks), page
         )
-
-        # Refine BEHIND statuses that need REST comparison
-        if rest_client:
-            statuses = await self._refine_statuses(statuses, username, rest_client)
-
-        return statuses
-
-    async def _refine_statuses(
-        self,
-        statuses: List[ForkStatus],
-        username: str,
-        rest_client,
-    ) -> List[ForkStatus]:
-        """
-        For all forks with active upstreams, call REST compare endpoint to get
-        exact ahead_by / behind_by counts and determine true state.
-
-        Runs sequentially with 0.5s delay between calls to avoid rate limiting.
-        Skips archived upstreams and upstreams inactive for >90 days.
-        """
-        now = datetime.now(timezone.utc)
-
-        refined: List[ForkStatus] = []
-        needs_compare = [
-            s for s in statuses
-            if not s.is_archived
-            and s.state not in (SyncState.ARCHIVED,)
-            and (
-                s.upstream_last_pushed is None
-                or (now - s.upstream_last_pushed).days <= 90
-            )
-        ]
-        skip_inactive = [s for s in statuses if s not in needs_compare]
-
-        logger.info(
-            "Comparing %d forks via REST (%d skipped — archived or inactive >90 days)",
-            len(needs_compare),
-            len(skip_inactive),
-        )
-
-        for i, status in enumerate(needs_compare):
-            if i > 0:
-                await asyncio.sleep(0.5)
-
-            try:
-                upstream_owner, upstream_repo_name = status.upstream_repo.split("/", 1)
-                ahead_by, behind_by = await rest_client.get_fork_commit_comparison(
-                    fork_owner=username,
-                    fork_repo=status.repo_name,
-                    upstream_owner=upstream_owner,
-                    upstream_repo=upstream_repo_name,
-                    branch=status.upstream_default_branch,
-                )
-                status.ahead_by = ahead_by
-                status.behind_by = behind_by
-
-                if ahead_by > 0 and behind_by > 0:
-                    status.state = SyncState.DIVERGED
-                    status.can_fast_forward = False
-                elif ahead_by > 0:
-                    status.state = SyncState.AHEAD
-                    status.can_fast_forward = False
-                elif behind_by > 0:
-                    status.state = SyncState.BEHIND
-                    status.can_fast_forward = True
-                else:
-                    status.state = SyncState.UP_TO_DATE
-                    status.can_fast_forward = False
-
-                logger.debug(
-                    "%s: ahead=%d behind=%d → %s",
-                    status.repo_name, ahead_by, behind_by, status.state.value,
-                )
-
-            except Exception as exc:
-                logger.warning(
-                    "Failed to compare %s: %s — marking UNKNOWN",
-                    status.repo_name,
-                    exc,
-                )
-                status.state = SyncState.UNKNOWN
-                status.behind_by = 0
-                status.ahead_by = 0
-                status.can_fast_forward = False
-
-            refined.append(status)
-
-        return refined + skip_inactive
+        return forks

@@ -8,9 +8,8 @@ Tests:
 - Handles missing parent (non-fork) gracefully
 """
 
-import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 from forksync import ForkStatus, SyncState
 from forksync.github.graphql import GitHubGraphQLClient, FORK_STATUS_QUERY
@@ -174,8 +173,8 @@ async def test_equal_oids_means_up_to_date():
 
     assert len(statuses) == 1
     assert statuses[0].state == SyncState.UP_TO_DATE
-    assert statuses[0].behind_by == 0
-    assert statuses[0].ahead_by == 0
+    assert statuses[0].behind == 0
+    assert statuses[0].ahead == 0
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +196,7 @@ async def test_archived_upstream_gives_archived_state():
 
     assert len(statuses) == 1
     assert statuses[0].state == SyncState.ARCHIVED
-    assert statuses[0].is_archived is True
+    assert statuses[0].archived is True
 
 
 # ---------------------------------------------------------------------------
@@ -223,8 +222,8 @@ async def test_differing_oids_marked_behind():
 
     assert len(statuses) == 1
     assert statuses[0].state == SyncState.BEHIND
-    # behind_by == -1 signals needs REST refinement
-    assert statuses[0].behind_by == -1
+    # behind == -1 signals needs REST refinement
+    assert statuses[0].behind == -1
 
 
 # ---------------------------------------------------------------------------
@@ -234,18 +233,23 @@ async def test_differing_oids_marked_behind():
 @pytest.mark.asyncio
 async def test_rest_refinement_detects_diverged():
     """
-    When REST comparison shows both ahead_by > 0 and behind_by > 0,
+    When REST comparison shows both ahead > 0 and behind > 0,
     state should be refined to DIVERGED.
     """
     nodes = [
-        _make_repo_node("diverged-repo", fork_oid="fork_oid", upstream_oid="upstream_oid")
+        _make_repo_node(
+            "diverged-repo",
+            fork_oid="fork_oid",
+            upstream_oid="upstream_oid",
+            pushed_at="2026-03-01T00:00:00Z",  # recent — within 90-day comparison window
+        )
     ]
     mock_response = _make_graphql_response(nodes)
 
     client = GitHubGraphQLClient(token="fake-token")
     client._execute_query = AsyncMock(return_value=mock_response)
 
-    # Mock REST client returning ahead_by=3, behind_by=10
+    # Mock REST client returning ahead=3, behind=10
     rest_client = AsyncMock()
     rest_client.get_fork_commit_comparison = AsyncMock(return_value=(3, 10))
 
@@ -253,9 +257,8 @@ async def test_rest_refinement_detects_diverged():
 
     assert len(statuses) == 1
     assert statuses[0].state == SyncState.DIVERGED
-    assert statuses[0].ahead_by == 3
-    assert statuses[0].behind_by == 10
-    assert statuses[0].can_fast_forward is False
+    assert statuses[0].ahead == 3
+    assert statuses[0].behind == 10
 
 
 # ---------------------------------------------------------------------------

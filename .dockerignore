@@ -1,0 +1,13 @@
+.git
+.github
+.env
+*.db
+*.log
+__pycache__
+*.py[cod]
+*.egg-info
+.venv
+venv
+tests
+pytest.ini
+SYNC_REPORT.md

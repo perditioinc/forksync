@@ -21,25 +21,26 @@ from forksync.sync.conflict import ConflictReporter
 def make_fork_status(
     repo_name="test-repo",
     state=SyncState.BEHIND,
-    behind_by=5,
-    ahead_by=0,
-    is_archived=False,
-    can_fast_forward=True,
+    behind=5,
+    ahead=0,
+    archived=False,
 ) -> ForkStatus:
     """Helper to build ForkStatus for tests."""
     return ForkStatus(
-        repo_name=repo_name,
+        name=repo_name,
         fork_url=f"https://github.com/testuser/{repo_name}",
-        upstream_repo=f"upstream/{repo_name}",
+        fork_branch="main",
+        upstream_owner="upstream",
+        upstream_repo=repo_name,
         upstream_url=f"https://github.com/upstream/{repo_name}",
-        fork_default_branch="main",
-        upstream_default_branch="main",
+        upstream_branch="main",
+        upstream_pushed_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ahead=ahead,
+        behind=behind,
+        archived=archived,
         state=state,
-        behind_by=behind_by,
-        ahead_by=ahead_by,
-        upstream_last_pushed=datetime(2024, 1, 1, tzinfo=timezone.utc),
-        is_archived=is_archived,
-        can_fast_forward=can_fast_forward,
+        schedule_tier="nightly",
+        due=True,
     )
 
 
@@ -80,7 +81,7 @@ async def test_archived_upstream_is_skipped():
     When upstream is archived, the fork must be skipped with
     action_taken='skipped' and error containing 'archived'.
     """
-    status = make_fork_status(is_archived=True, state=SyncState.ARCHIVED)
+    status = make_fork_status(archived=True, state=SyncState.ARCHIVED)
     engine = make_engine()
 
     result = await engine.sync_fork(status)
@@ -105,9 +106,8 @@ async def test_ahead_fork_is_skipped():
     """
     status = make_fork_status(
         state=SyncState.AHEAD,
-        ahead_by=3,
-        behind_by=0,
-        can_fast_forward=False,
+        ahead=3,
+        behind=0,
     )
     engine = make_engine()
 
@@ -132,9 +132,8 @@ async def test_diverged_creates_issue():
     """
     status = make_fork_status(
         state=SyncState.DIVERGED,
-        ahead_by=5,
-        behind_by=12,
-        can_fast_forward=False,
+        ahead=5,
+        behind=12,
     )
     engine = make_engine(conflict_issue_url="https://github.com/testuser/test-repo/issues/99")
 
@@ -157,28 +156,27 @@ async def test_diverged_creates_issue():
 async def test_behind_fork_syncs():
     """
     When fork is behind upstream and can fast-forward, engine must:
-    - Call merge_upstream API
+    - Run gh repo sync
     - Return action_taken='synced'
-    - Return commits_merged equal to behind_by
+    - Return commits_merged equal to behind count
     """
     status = make_fork_status(
         state=SyncState.BEHIND,
-        behind_by=5,
-        ahead_by=0,
-        can_fast_forward=True,
+        behind=5,
+        ahead=0,
     )
     engine = make_engine()
 
-    result = await engine.sync_fork(status)
+    # Mock _run_gh_sync to succeed
+    with patch("forksync.sync.engine._run_gh_sync", new_callable=AsyncMock) as mock_gh:
+        mock_gh.return_value = (0, "synced", "")
+        engine.rest_client.verify_sync = AsyncMock(return_value=True)
+
+        result = await engine.sync_fork(status)
 
     assert result.action_taken == "synced"
     assert result.commits_merged == 5
     assert result.error is None
-    engine.rest_client.merge_upstream.assert_called_once_with(
-        owner="testuser",
-        repo="test-repo",
-        branch="main",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +194,8 @@ async def test_dry_run_makes_no_changes():
     """
     status = make_fork_status(
         state=SyncState.BEHIND,
-        behind_by=7,
-        ahead_by=0,
-        can_fast_forward=True,
+        behind=7,
+        ahead=0,
     )
     engine = make_engine(dry_run=True)
 
@@ -219,9 +216,8 @@ async def test_up_to_date_fork_is_skipped():
     """Fork that is already current should be skipped with no error."""
     status = make_fork_status(
         state=SyncState.UP_TO_DATE,
-        behind_by=0,
-        ahead_by=0,
-        can_fast_forward=False,
+        behind=0,
+        ahead=0,
     )
     engine = make_engine()
 
@@ -241,7 +237,7 @@ async def test_up_to_date_fork_is_skipped():
 async def test_sync_all_processes_all_forks():
     """sync_all must return one SyncResult per ForkStatus."""
     statuses = [
-        make_fork_status(repo_name=f"repo-{i}", state=SyncState.UP_TO_DATE, behind_by=0)
+        make_fork_status(repo_name=f"repo-{i}", state=SyncState.UP_TO_DATE, behind=0)
         for i in range(5)
     ]
     engine = make_engine()
@@ -251,3 +247,31 @@ async def test_sync_all_processes_all_forks():
     assert len(results) == 5
     for result in results:
         assert result.action_taken == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Schedule-skipped forks are not processed
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_schedule_skipped_fork_is_not_synced():
+    """
+    When a fork has due=False, it should be skipped with
+    action_taken='schedule_skipped' immediately.
+    """
+    status = make_fork_status(
+        state=SyncState.BEHIND,
+        behind=5,
+        ahead=0,
+    )
+    # Mark as not due
+    status.due = False
+    status.schedule_tier = "monthly"
+
+    engine = make_engine()
+
+    result = await engine.sync_fork(status)
+
+    assert result.action_taken == "schedule_skipped"
+    assert result.commits_merged == 0
+    engine.rest_client.merge_upstream.assert_not_called()

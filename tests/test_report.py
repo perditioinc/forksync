@@ -18,22 +18,24 @@ from forksync.report.markdown import ReportGenerator, _format_duration
 def make_status(
     repo_name: str,
     state: SyncState = SyncState.BEHIND,
-    behind_by: int = 5,
-    ahead_by: int = 0,
+    behind: int = 5,
+    ahead: int = 0,
 ) -> ForkStatus:
     return ForkStatus(
-        repo_name=repo_name,
+        name=repo_name,
         fork_url=f"https://github.com/testuser/{repo_name}",
-        upstream_repo=f"upstream/{repo_name}",
+        fork_branch="main",
+        upstream_owner="upstream",
+        upstream_repo=repo_name,
         upstream_url=f"https://github.com/upstream/{repo_name}",
-        fork_default_branch="main",
-        upstream_default_branch="main",
+        upstream_branch="main",
+        upstream_pushed_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ahead=ahead,
+        behind=behind,
+        archived=False,
         state=state,
-        behind_by=behind_by,
-        ahead_by=ahead_by,
-        upstream_last_pushed=datetime(2024, 1, 1, tzinfo=timezone.utc),
-        is_archived=False,
-        can_fast_forward=state == SyncState.BEHIND,
+        schedule_tier="nightly",
+        due=True,
     )
 
 
@@ -81,8 +83,8 @@ def test_report_has_all_sections():
         for r in results
     }
     # Fix ahead status
-    statuses["ahead-repo"].ahead_by = 2
-    statuses["ahead-repo"].behind_by = 0
+    statuses["ahead-repo"].ahead = 2
+    statuses["ahead-repo"].behind = 0
 
     report = generator.generate(
         results=results,
@@ -100,8 +102,6 @@ def test_report_has_all_sections():
     assert "## Summary" in report
     # Must have synced section
     assert "## \u2705 Synced" in report
-    # Must have conflicts section
-    assert "## \u26a0\ufe0f Needs Manual Attention" in report
     # Must have ahead section
     assert "## \u2b06\ufe0f Skipped" in report
     # Must have API calls
@@ -136,11 +136,15 @@ def test_synced_repos_appear_in_table():
 
 
 # ---------------------------------------------------------------------------
-# Test 3: Conflict repos appear with issue links
+# Test 3: Conflict repos do NOT appear as a separate section (diverged forks
+#          create GitHub Issues — no separate section in the report)
 # ---------------------------------------------------------------------------
 
-def test_conflict_repos_appear_with_issue_links():
-    """Conflict repos must appear in the conflicts section with issue links."""
+def test_conflict_repos_not_in_separate_section():
+    """
+    Diverged repos have GitHub Issues created but do not appear
+    in a 'Needs Manual Attention' section — that section was removed.
+    """
     generator = ReportGenerator()
     issue_url = "https://github.com/testuser/diverged-repo/issues/42"
     results = [
@@ -152,8 +156,8 @@ def test_conflict_repos_appear_with_issue_links():
         ),
     ]
     diverged_status = make_status("diverged-repo", state=SyncState.DIVERGED)
-    diverged_status.ahead_by = 3
-    diverged_status.behind_by = 8
+    diverged_status.ahead = 3
+    diverged_status.behind = 8
     statuses = {"diverged-repo": diverged_status}
 
     report = generator.generate(
@@ -164,9 +168,8 @@ def test_conflict_repos_appear_with_issue_links():
         api_calls=3,
     )
 
-    assert "diverged-repo" in report
-    assert issue_url in report
-    assert "Issue" in report
+    # "Needs Manual Attention" section was removed
+    assert "Needs Manual Attention" not in report
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +182,8 @@ def test_ahead_repos_appear_in_ahead_list():
     results = [
         make_result("my-custom-fork", "skipped", state=SyncState.AHEAD),
     ]
-    ahead_status = make_status("my-custom-fork", state=SyncState.AHEAD, ahead_by=5)
-    ahead_status.ahead_by = 5
+    ahead_status = make_status("my-custom-fork", state=SyncState.AHEAD, ahead=5)
+    ahead_status.ahead = 5
     statuses = {"my-custom-fork": ahead_status}
 
     report = generator.generate(
@@ -231,7 +234,7 @@ def test_empty_results_render_gracefully():
     assert "# Fork Sync Report" in report
     assert "emptyuser" in report
     # All counts should be 0 or represented as such
-    assert "| ✅ Synced | 0 |" in report
+    assert "| ✅ Synced (verified) | 0 |" in report
 
 
 # ---------------------------------------------------------------------------
@@ -285,12 +288,10 @@ def test_summary_counts_are_accurate():
     )
 
     # 2 synced
-    assert "| ✅ Synced | 2 |" in report
-    # 1 conflict
-    assert "| ⚠️ Needs attention | 1 |" in report
+    assert "| ✅ Synced (verified) | 2 |" in report
     # 1 up to date
-    assert "| ⏭️ Already current | 1 |" in report
+    assert "| ⏭️ Already current   | 1 |" in report
     # 1 archived
-    assert "| 🗄️ Archived (skipped) | 1 |" in report
+    assert "| 🗄️ Archived (skipped)| 1 |" in report
     # 1 ahead
-    assert "| ⬆️ Ahead (skipped) | 1 |" in report
+    assert "| ⬆️ Ahead (skipped)   | 1 |" in report
