@@ -183,11 +183,42 @@ class SyncEngine:
                     repo=status.repo_name,
                     branch=status.fork_default_branch,
                 )
+                merge_type = result.get("merge_type", "")
+                logger.debug(
+                    "[%s] merge-upstream response: merge_type=%r message=%r",
+                    status.repo_name,
+                    merge_type,
+                    result.get("message", ""),
+                )
+
+                if merge_type == "none":
+                    # 200 but GitHub says nothing changed — already up to date
+                    logger.info(
+                        "[%s] Already up to date (merge_type=none)", status.repo_name
+                    )
+                    return SyncResult(
+                        repo_name=status.repo_name,
+                        state=SyncState.UP_TO_DATE,
+                        action_taken="skipped",
+                        commits_merged=0,
+                        error=None,
+                        duration_seconds=time.monotonic() - start_time,
+                        issue_url=None,
+                    )
+
+                if merge_type not in ("fast-forward", "merge"):
+                    logger.warning(
+                        "[%s] Unexpected merge_type=%r — treating as synced",
+                        status.repo_name,
+                        merge_type,
+                    )
+
                 commits_merged = status.behind_by if status.behind_by > 0 else 1
                 logger.info(
-                    "[%s] Synced successfully (%s)",
+                    "[%s] Synced successfully — %d commit(s) via %s",
                     status.repo_name,
-                    result.get("merge_type", "fast-forward"),
+                    commits_merged,
+                    merge_type or "unknown",
                 )
                 return SyncResult(
                     repo_name=status.repo_name,
