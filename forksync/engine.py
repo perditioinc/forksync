@@ -363,6 +363,26 @@ async def run_sync(
             "Sync complete: total=%d checked=%d synced=%d errors=%d duration=%.1fs",
             run.total_forks, run.checked, run.synced, run.errors, run.duration_seconds,
         )
+
+        # Publish event to Pub/Sub (optional — skips if reporium-events not installed)
+        try:
+            from reporium_events import EventType, publish_event
+            await publish_event(
+                event_type=EventType.SYNC_COMPLETED,
+                source="forksync",
+                payload={
+                    "repos_checked": run.checked,
+                    "repos_synced": run.synced,
+                    "duration_seconds": run.duration_seconds,
+                    "errors": run.errors,
+                },
+                project_id=config.gcp_project_id or "perditio-platform",
+            )
+        except ImportError:
+            logger.debug("reporium-events not installed — skipping event publish")
+        except Exception as exc:
+            logger.warning("Failed to publish sync event: %s", exc)
+
         return run
 
     finally:
