@@ -1,5 +1,7 @@
 # forksync
 
+[![Nightly](https://github.com/perditioinc/forksync/actions/workflows/sync.yml/badge.svg)](https://github.com/perditioinc/forksync/actions/workflows/sync.yml)
+
 > Keep GitHub forks in sync at scale. Supports 10,000+ repos. Runs in seconds.
 
 ## How it works
