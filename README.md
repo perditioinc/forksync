@@ -1,14 +1,10 @@
 # forksync
 
 <!-- perditio-badges-start -->
-[![Tests](https://github.com/perditioinc/forksync/actions/workflows/sync.yml/badge.svg)](https://github.com/perditioinc/forksync/actions/workflows/sync.yml)
+[![Sync](https://github.com/perditioinc/forksync/actions/workflows/sync.yml/badge.svg)](https://github.com/perditioinc/forksync/actions/workflows/sync.yml)
 ![Last Commit](https://img.shields.io/github/last-commit/perditioinc/forksync)
-![License](https://img.shields.io/github/license/perditioinc/forksync)
 ![python](https://img.shields.io/badge/python-3.11%2B-3776ab)
 ![suite](https://img.shields.io/badge/suite-Reporium-6e40c9)
-![forks managed](https://img.shields.io/badge/forks%20managed-826-blue)
-![runtime](https://img.shields.io/badge/runtime-68s-blue)
-![updated](https://img.shields.io/badge/updated-nightly-blue)
 <!-- perditio-badges-end -->
 
 > Keep GitHub forks in sync at scale. Supports 10,000+ repos. Runs in seconds.
