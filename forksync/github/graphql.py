@@ -36,6 +36,7 @@ query GetForkStatus($login: String!, $after: String) {
       nodes {
         name
         url
+        isPrivate
         defaultBranchRef {
           name
         }
@@ -152,6 +153,11 @@ class GitHubGraphQLClient:
         """Parse a single repository node into a ForkDocument."""
         try:
             repo_name = node.get("name", "")
+
+            # SECURITY: Never sync private forks
+            if node.get("isPrivate", False):
+                logger.debug("Skipping private fork: %s", repo_name)
+                return None
 
             parent = node.get("parent")
             if not parent:
