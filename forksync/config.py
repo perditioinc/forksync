@@ -35,8 +35,8 @@ class Config:
     weekly_threshold_days: int = 365
     gcp_project_id: str = ""
     firestore_collection: str = "forks"
-    redis_host: str = "localhost"
-    redis_port: int = 6379
+    upstash_redis_url: str = ""
+    upstash_redis_token: str = ""
     slack_webhook: str = ""
     discord_webhook: str = ""
     dry_run: bool = False
@@ -100,9 +100,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
     # gcp_project_id: env > config
     gcp_project_id = os.environ.get("GCP_PROJECT_ID", "") or str(gcp_cfg.get("project_id", "") or "")
 
-    # redis: env > config
-    redis_host = os.environ.get("REDIS_HOST", "") or str(gcp_cfg.get("redis_host", "localhost") or "localhost")
-    redis_port = int(os.environ.get("REDIS_PORT", 0) or gcp_cfg.get("redis_port", 6379) or 6379)
+    # Upstash Redis: env vars only (no config file support needed — credentials stay in Secret Manager)
+    upstash_redis_url = os.environ.get("UPSTASH_REDIS_REST_URL", "")
+    upstash_redis_token = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
     # firestore collection: env > config
     firestore_collection = (
@@ -127,8 +127,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
         weekly_threshold_days=int(schedule_cfg.get("weekly_threshold_days", 365)),
         gcp_project_id=gcp_project_id,
         firestore_collection=firestore_collection,
-        redis_host=redis_host,
-        redis_port=redis_port,
+        upstash_redis_url=upstash_redis_url,
+        upstash_redis_token=upstash_redis_token,
         slack_webhook=slack_webhook,
         discord_webhook=discord_webhook,
         dry_run=dry_run,

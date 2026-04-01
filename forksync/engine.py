@@ -63,7 +63,7 @@ async def run_sync(
     # Set up cache
     owns_cache = cache is None
     if cache is None:
-        cache = CacheClient(host=config.redis_host, port=config.redis_port)
+        cache = CacheClient(upstash_url=config.upstash_redis_url, upstash_token=config.upstash_redis_token)
         await cache.connect()
 
     # Set up HTTP client.

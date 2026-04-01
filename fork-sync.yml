@@ -11,8 +11,6 @@ schedule:
 gcp:
   project_id: ""
   firestore_collection: forks
-  redis_host: localhost
-  redis_port: 6379
 
 notifications:
   slack_webhook: ""
