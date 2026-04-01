@@ -48,7 +48,7 @@ forksync service
 ## Setup
 
 ### Prerequisites
-- GCP project with Firestore and Memorystore (Redis) enabled
+- GCP project with Firestore enabled
 - Cloud Run service deployed
 - GitHub token with repo scope
 
@@ -93,7 +93,6 @@ schedule:
 gcp:
   project_id: your-project-id
   firestore_collection: forks
-  redis_host: your-memorystore-host
 
 notifications:
   slack_webhook: ""
