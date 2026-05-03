@@ -21,14 +21,28 @@ jobs:
 
       - name: Trigger sync and capture output
         run: |
-          curl --no-buffer -X POST ${{ secrets.FORKSYNC_SERVICE_URL }}/run \
+          # KAN-218: capture HTTP status separately and fail loud. Prior version
+          # used plain `curl` which exits 0 on any HTTP response, masking 9+
+          # days of silent 401s that only surfaced during KAN-214 SA migration.
+          HTTP_CODE=$(curl --no-buffer -X POST ${{ secrets.FORKSYNC_SERVICE_URL }}/run \
             -H "Authorization: Bearer ${{ secrets.FORKSYNC_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d '{"dry_run": ${{ inputs.dry_run || false }}}' \
             --max-time 900 \
-            -o /tmp/sync_output.ndjson
+            -o /tmp/sync_output.ndjson \
+            -w "%{http_code}")
+          echo "HTTP status: $HTTP_CODE"
           echo "Sync complete. Last lines:"
           tail -5 /tmp/sync_output.ndjson
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Sync HTTP $HTTP_CODE — response saved above. Failing the workflow."
+            exit 1
+          fi
+          # Defensive: even on 200, surface unhandled exceptions in NDJSON body.
+          if grep -q '"level": "ERROR".*service.main\|sync failed' /tmp/sync_output.ndjson 2>/dev/null; then
+            echo "::error::Sync returned 200 but logs contain ERROR — investigate."
+            exit 1
+          fi
 
       - name: Generate SYNC_REPORT.md
         if: ${{ inputs.dry_run != 'true' }}
